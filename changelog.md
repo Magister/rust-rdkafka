@@ -4,6 +4,43 @@ See also the [rdkafka-sys changelog](rdkafka-sys/changelog.md).
 
 ## Unreleased
 
+* Update MSRV to 1.70
+* Remove testing for old Kafka versions (before 3.0). Add tests for 3.7.
+* Fix test dependency on docker compose.
+* Address wakeup races introduced by pivoting to the event API.
+
+## 0.36.2 (2024-01-16)
+
+* Update `BaseConsumer::poll` to return `None` when handling rebalance
+  or offset commit events.
+
+## 0.36.0 (2023-11-08)
+
+* Pivot the library from using librdkafka's callback interface to using
+  the event interface. The public API of the crate does not change.
+
+## 0.35.0 (2023-11-07)
+
+* Update bundled librdkafka to 2.3.0.
+* Add cargo enforcement of MSRV of 1.61.
+* Derives serde::Serialize on Statistics
+
+## 0.34.0 (2023-08-25)
+
+* Update bundled librdkafka to 2.2.0.
+
+## 0.33.2 (2023-07-06)
+
+* **Breaking change.** Change signature for `seek_partitions`. Following
+  librdkafka, individual partition errors should be reported in the per-partition
+  `error` field of `TopicPartitionList` elements.
+
+## 0.33.0 (2023-06-30)
+
+* Add interface to specify custom partitioners by extending `ProducerContext`
+  trait with capability to return optional custom partitioner.
+* Add `seek_partitions` to consumer.
+
 ## 0.32.1 (2023-06-09)
 
 * Add support for the cluster mock API.
