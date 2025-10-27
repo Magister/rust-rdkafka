@@ -17,7 +17,7 @@ use crate::error::{IsError, KafkaError, KafkaResult};
 use crate::util::{self, millis_to_epoch, KafkaDrop, NativePtr};
 
 /// Timestamp of a Kafka message.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy)]
 pub enum Timestamp {
     /// Timestamp not available.
     NotAvailable,
@@ -320,7 +320,7 @@ unsafe impl KafkaDrop for RDKafkaMessage {
     const DROP: unsafe extern "C" fn(*mut Self) = no_op;
 }
 
-impl<'a> fmt::Debug for BorrowedMessage<'a> {
+impl fmt::Debug for BorrowedMessage<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -421,7 +421,7 @@ impl<'a> BorrowedMessage<'a> {
     }
 }
 
-impl<'a> Message for BorrowedMessage<'a> {
+impl Message for BorrowedMessage<'_> {
     type Headers = BorrowedHeaders;
 
     fn key(&self) -> Option<&[u8]> {
@@ -488,8 +488,8 @@ impl<'a> Message for BorrowedMessage<'a> {
     }
 }
 
-unsafe impl<'a> Send for BorrowedMessage<'a> {}
-unsafe impl<'a> Sync for BorrowedMessage<'a> {}
+unsafe impl Send for BorrowedMessage<'_> {}
+unsafe impl Sync for BorrowedMessage<'_> {}
 
 //
 // ********** OWNED MESSAGE **********
@@ -548,7 +548,7 @@ impl OwnedHeaders {
             rdsys::rd_kafka_header_add(
                 self.ptr(),
                 header.key.as_ptr() as *const c_char,
-                header.key.as_bytes().len() as isize,
+                header.key.len() as isize,
                 value_ptr,
                 value_len,
             )
@@ -809,7 +809,7 @@ impl ToBytes for String {
     }
 }
 
-impl<'a, T: ToBytes> ToBytes for &'a T {
+impl<T: ToBytes> ToBytes for &T {
     fn to_bytes(&self) -> &[u8] {
         (*self).to_bytes()
     }

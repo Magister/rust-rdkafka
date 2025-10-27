@@ -67,7 +67,7 @@ use crate::producer::{
     DefaultProducerContext, Partitioner, Producer, ProducerContext, PurgeConfig,
 };
 use crate::topic_partition_list::TopicPartitionList;
-use crate::util::{IntoOpaque, NativePtr, Timeout};
+use crate::util::{Deadline, IntoOpaque, NativePtr, Timeout};
 
 pub use crate::message::DeliveryResult;
 
@@ -338,7 +338,6 @@ where
     client: Client<C>,
     queue: NativeQueue,
     _partitioner: PhantomData<Part>,
-    min_poll_interval: Timeout,
 }
 
 impl<C, Part> BaseProducer<C, Part>
@@ -353,7 +352,6 @@ where
             client,
             queue,
             _partitioner: PhantomData,
-            min_poll_interval: Timeout::After(Duration::from_millis(100)),
         }
     }
 
@@ -362,18 +360,25 @@ where
     /// Regular calls to `poll` are required to process the events and execute
     /// the message delivery callbacks.
     pub fn poll<T: Into<Timeout>>(&self, timeout: T) {
-        let event = self.client().poll_event(&self.queue, timeout.into());
-        if let EventPollResult::Event(ev) = event {
-            let evtype = unsafe { rdsys::rd_kafka_event_type(ev.ptr()) };
-            match evtype {
-                rdsys::RD_KAFKA_EVENT_DR => self.handle_delivery_report_event(ev),
-                _ => {
-                    let evname = unsafe {
-                        let evname = rdsys::rd_kafka_event_name(ev.ptr());
-                        CStr::from_ptr(evname).to_string_lossy()
-                    };
-                    warn!("Ignored event '{}' on base producer poll", evname);
+        let deadline: Deadline = timeout.into().into();
+        loop {
+            let event = self.client().poll_event(&self.queue, &deadline);
+            if let EventPollResult::Event(ev) = event {
+                let evtype = unsafe { rdsys::rd_kafka_event_type(ev.ptr()) };
+                match evtype {
+                    rdsys::RD_KAFKA_EVENT_DR => self.handle_delivery_report_event(ev),
+                    rdsys::RD_KAFKA_EVENT_ERROR => self.handle_error_event(ev),
+                    _ => {
+                        let evname = unsafe {
+                            let evname = rdsys::rd_kafka_event_name(ev.ptr());
+                            CStr::from_ptr(evname).to_string_lossy()
+                        };
+                        warn!("Ignored event '{}' on base producer poll", evname);
+                    }
                 }
+            }
+            if deadline.elapsed() {
+                break;
             }
         }
     }
@@ -399,6 +404,15 @@ where
             let delivery_opaque = unsafe { C::DeliveryOpaque::from_ptr((*msg)._private) };
             self.context().delivery(&delivery_result, delivery_opaque);
         }
+    }
+
+    fn handle_error_event(&self, event: NativePtr<RDKafkaEvent>) {
+        let rdkafka_err = unsafe { rdsys::rd_kafka_event_error(event.ptr()) };
+        let error = KafkaError::Global(rdkafka_err.into());
+        let reason = unsafe {
+            CStr::from_ptr(rdsys::rd_kafka_event_error_string(event.ptr())).to_string_lossy()
+        };
+        self.context().error(error, reason.trim());
     }
 
     /// Returns a pointer to the native Kafka client.
@@ -493,26 +507,23 @@ where
 
     // As this library uses the rdkafka Event API, flush will not call rd_kafka_poll() but instead wait for
     // the librdkafka-handled message count to reach zero. Runs until value reaches zero or timeout.
+    // https://github.com/confluentinc/librdkafka/blob/c024ac13daf98667de2b8724986e97f489644c15/src/rdkafka.c#L4542-L4551
     fn flush<T: Into<Timeout>>(&self, timeout: T) -> KafkaResult<()> {
-        let mut timeout = timeout.into();
+        let deadline: Deadline = timeout.into().into();
         loop {
-            let op_timeout = std::cmp::min(timeout, self.min_poll_interval);
-            if self.in_flight_count() > 0 {
-                unsafe { rdsys::rd_kafka_flush(self.native_ptr(), 0) };
-                self.poll(op_timeout);
-            } else {
-                return Ok(());
-            }
-
-            if op_timeout >= timeout {
-                let ret = unsafe { rdsys::rd_kafka_flush(self.native_ptr(), 0) };
-                if ret.is_error() {
-                    return Err(KafkaError::Flush(ret.into()));
-                } else {
+            match unsafe { rdsys::rd_kafka_flush(self.native_ptr(), 0) } {
+                rdsys::rd_kafka_resp_err_t::RD_KAFKA_RESP_ERR_NO_ERROR => {
+                    // Flush completed
                     return Ok(());
                 }
-            }
-            timeout -= op_timeout;
+                to @ rdsys::rd_kafka_resp_err_t::RD_KAFKA_RESP_ERR__TIMED_OUT => {
+                    if deadline.elapsed() {
+                        return Err(KafkaError::Flush(to.into()));
+                    }
+                    self.poll(deadline.remaining().min(Duration::from_millis(100)));
+                }
+                e => return Err(KafkaError::Flush(e.into())),
+            };
         }
     }
 

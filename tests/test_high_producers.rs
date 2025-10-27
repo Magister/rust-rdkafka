@@ -11,6 +11,7 @@ use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::message::{Header, Headers, Message, OwnedHeaders};
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use rdkafka::util::Timeout;
+use rdkafka::Timestamp;
 
 use crate::utils::*;
 
@@ -44,9 +45,10 @@ async fn test_future_producer_send() {
     let results: Vec<_> = results.collect().await;
     assert!(results.len() == 10);
     for (i, result) in results.into_iter().enumerate() {
-        let (partition, offset) = result.unwrap();
-        assert_eq!(partition, 1);
-        assert_eq!(offset, i as i64);
+        let delivered = result.unwrap();
+        assert_eq!(delivered.partition, 1);
+        assert_eq!(delivered.offset, i as i64);
+        assert!(delivered.timestamp < Timestamp::now());
     }
 }
 
@@ -167,15 +169,14 @@ async fn test_future_undelivered() {
             .set("message.timeout.ms", "1");
         let producer: FutureProducer = config.create().expect("Failed to create producer");
 
-        let delivery_future = producer
+        producer
             .send_result(
                 FutureRecord::to("topic")
                     .payload("payload")
                     .key("key")
                     .partition(100),
             )
-            .expect("Failed to queue message");
-        delivery_future
+            .expect("Failed to queue message")
 
         // drop producer. This should resolve the future as per purge API (couldn't be delivered)
     };

@@ -300,10 +300,10 @@ impl<C: ClientContext> Client<C> {
         &self.context
     }
 
-    pub(crate) fn poll_event(
+    pub(crate) fn poll_event<T: Into<Timeout>>(
         &self,
         queue: &NativeQueue,
-        timeout: Timeout,
+        timeout: T,
     ) -> EventPollResult<NativeEvent> {
         let event = unsafe { NativeEvent::from_ptr(queue.poll(timeout)) };
         if let Some(ev) = event {
@@ -416,7 +416,10 @@ impl<C: ClientContext> Client<C> {
                 let message = match CString::new(e.to_string()) {
                     Ok(message) => message,
                     Err(e) => {
-                        error!("error message generated while refreshing OAuth token has embedded null character: {}", e);
+                        error!(
+                            "error message generated while refreshing OAuth token has embedded null character: {}",
+                            e
+                        );
                         CString::new(
                             "error while refreshing OAuth token has embedded null character",
                         )
